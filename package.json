@@ -1,0 +1,21 @@
+{
+  "name": "com.akaidus.audiomanagement",
+  "displayName": "Audio Management",
+  "version": "1.0.0",
+  "unity": "6000.3",
+  "description": "A simple audio management system for Unity projects.",
+  "keywords": [
+    "audio",
+    "management",
+    "unity"
+  ],
+  "author": {
+    "name": "Nikolaj Jensen",
+    "url": "https://github.com/Akaidus"
+  },
+  "repository": {
+    "url": "https://github.com/FBKrog/P8-Project.git",
+    "type": "git",
+    "revision": "658a0c3c0ed4e1437a3f43e16023e8d166dcff10"
+  }
+}
