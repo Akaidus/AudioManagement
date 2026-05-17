@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using UnityEngine;
 using System.Collections;
 using System.Collections.Generic;
@@ -6,27 +7,6 @@ using Random = UnityEngine.Random;
 
 namespace AudioManagement
 {
-
-    /// <summary>
-    /// Enum for defining different types of sound effects.
-    /// Used to reference the sound effect in code.
-    /// For new SFX types, add a new entry to the SfxType enum and Create a new Scriptable Object of the type "SfxScriptableObject" for it.
-    /// </summary>
-    public enum SfxType
-    {
-        TestSound,
-    }
-
-    /// <summary>
-    /// Class for storing sound effect data.
-    /// </summary>
-    [Serializable]
-    public class SfxData
-    {
-        public AudioClip[] clips;
-        [Range(0, 1)] public float volume;
-    }
-
     /// <summary>
     /// Singleton class for managing audio in the game.
     /// Stores references to audio clips in a dictionary for easy access, and manage a pool of audio sources for playing sound effects.
@@ -36,14 +16,15 @@ namespace AudioManagement
     {
         [Header("Audio Source Pooling")]
         [SerializeField] PooledAudioSource audioSourcePrefab;
-        [SerializeField] int maxAudioSourcesCount = 100;
-        [SerializeField] [Tooltip("The interval at which to prune the audio source pool.")] float pruneInterval = 10f;
+        [SerializeField] int maxAudioSourcesCount = 40;
+        [SerializeField] [Tooltip("The interval at which to prune the audio source pool. If 0, pruning is disabled.")] float pruneInterval = 10f;
         Queue<PooledAudioSource> audioSourcePool = new();
         WaitForSeconds waitForSeconds0_1 = new(0.1f);
+        WaitForSeconds waitPruneInterval;
 
-        [Header("Audio Clips")]
-        [SerializeField] SfxScriptableObject[] sfxScriptableObjects;
-        Dictionary<SfxType, SfxScriptableObject> sfxDictionary = new();
+        [Header("Audio Library")]
+        [SerializeField] AudioLibrary[] audioLibraryScriptableObjects;
+        Dictionary<Type, Dictionary<Enum, AudioData>> audioLibraries = new();
 
         Coroutine pruneRoutine;
         static AudioManager instance;
@@ -64,35 +45,76 @@ namespace AudioManagement
                 Destroy(transform.GetChild(i).gameObject);
             }
 
-            PopulateDictionary();
+            PopulateAudioLibraries();
             CreateAudioSourcePool();
+
+            if (pruneInterval == 0) return;
+            waitPruneInterval = new (pruneInterval);
             pruneRoutine = StartCoroutine(PrunePool());
         }
 
-        void PopulateDictionary()
+        /// <summary>
+        /// Populates the audioLibraries dictionary by iterating through the assigned AudioLibrary ScriptableObjects, extracting their enum types and associated SfxScriptableObjects, and organizing them into a nested dictionary structure for easy access when playing sound effects.
+        /// </summary>
+        void PopulateAudioLibraries()
         {
-            sfxDictionary.Clear();
-            if (sfxScriptableObjects == null) return;
-            if (sfxScriptableObjects.Length <= 0)
+            audioLibraries.Clear();
+            if (audioLibraryScriptableObjects == null) return;
+            
+            foreach (var library in audioLibraryScriptableObjects)
             {
-                Debug.LogWarning("[Audio Manager] No SfxScriptableObjects assigned in AudioManager inspector. Assign SfxScriptableObjects to populate the audio clip dictionary, else the audio clips will not play.");
-                return;
-            }
-            foreach (var sfx in sfxScriptableObjects)
-            {
-                if (sfx == null)
+                if (library == null)
                 {
-                    Debug.LogWarning($"[Audio Manager] Null SfxScriptableObject found at index {sfx} in AudioManager inspector. Assign a valid SfxScriptableObject or remove the entry.");
+                    Debug.LogWarning($"[Audio Manager] Null AudioLibrary ScriptableObject found in AudioManager inspector. Assign a valid AudioLibrary ScriptableObject or remove the entry. " +
+                                     $"This could also be a false alert an AudioLibrary ScriptableObject was dragged into the inspector when none existed previously.");
                     continue;
                 }
-                if (sfxDictionary.ContainsKey(sfx.sfxType))
+
+                // Create a dictionary for the current library to store its Audio Entries, using its enum type as the key and the SfxScriptableObject as the value.
+                Dictionary<Enum, AudioData> libraryDictionary = new();
+
+                // Find the enum type that matches the library's enumType field by searching through all loaded assemblies and their types.
+                Type enumCategory = AppDomain.CurrentDomain.GetAssemblies().SelectMany(a => a.GetTypes()).FirstOrDefault(t => t.IsEnum && t.Name == library.audioCategory.ToString());
+                
+                if (enumCategory == null)
                 {
-                    Debug.LogWarning($"[Audio Manager] Duplicate SfxType {sfx.sfxType} found in AudioManager inspector. Remove or change the duplicate entry.");
+                    Debug.LogError($"[Audio Manager] Could not find enum type {library.audioCategory}");
                     continue;
                 }
-                sfxDictionary.Add(sfx.sfxType, sfx);
+
+                foreach (var sound in library.audioData)
+                {
+                    if (sound == null)
+                        continue;
+
+                    if (Enum.TryParse(enumCategory, sound.Name, out object value))
+                    {
+                        sound.enumValue = (Enum)value;
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"[Audio Manager] Could not parse enum value from sound name {sound.Name} in library {library.audioCategory}. Make sure the sound name matches an enum value in the library's enum type.");
+                        continue;
+                    }
+
+                    if (libraryDictionary.ContainsKey((Enum)value))
+                    {
+                        Debug.LogWarning($"[Audio Manager] Duplicate enumValue {value} in {enumCategory} found in AudioManager inspector. Remove or change the duplicate entry.");
+                        continue;
+                    }
+
+                    libraryDictionary.Add((Enum)value, sound);
+                }
+                if(audioLibraries.ContainsKey(enumCategory))
+                {
+                    Debug.LogWarning($"[Audio Manager] Duplicate category {enumCategory} found in AudioManager inspector. Remove or change the duplicate entry.");
+                    continue;
+                }
+                audioLibraries.Add(enumCategory, libraryDictionary);
+                Debug.Log($"[Audio Manager] Library {library.audioCategory} successfully populated with: {string.Join(", ", libraryDictionary.Keys)}");
             }
         }
+        
 
         /// <summary>
         /// Initializes the audio source pool by instantiating a specified number of audio sources from the prefab and adding them to the pool.
@@ -103,7 +125,7 @@ namespace AudioManagement
             {
                 var audioSource = Instantiate(audioSourcePrefab, transform);
 #if UNITY_EDITOR
-                audioSource.gameObject.name = $"AudioSource_{i}";
+                audioSource.gameObject.name = $"AudioSource_{i + 1}";
 #endif
                 audioSourcePool.Enqueue(audioSource);
             }
@@ -114,10 +136,9 @@ namespace AudioManagement
         /// </summary>
         IEnumerator PrunePool()
         {
-            WaitForSeconds wait = new(pruneInterval);
             while (true)
             {
-                yield return wait;
+                yield return waitPruneInterval;
                 while (audioSourcePool.Count > maxAudioSourcesCount)
                 {
                     var audioSource = audioSourcePool.Dequeue();
@@ -133,7 +154,7 @@ namespace AudioManagement
         {
             var audioSource = Instantiate(audioSourcePrefab, transform);
 #if UNITY_EDITOR
-            audioSource.gameObject.name = $"AudioSource_{audioSourcePool.Count}";
+            audioSource.gameObject.name = $"AudioSource_{transform.childCount}";
 #endif
             audioSourcePool.Enqueue(audioSource);
             return audioSource.AudioSource;
@@ -168,27 +189,51 @@ namespace AudioManagement
         }
 
         /// <summary>
-        /// Try to get a random audio clip for the specified SFX type. 
+        /// Try to get a random audio clip for the specified SFX type from the specified audio library.
         /// If there are no clips assigned for that SFX type, it will log a warning and return false. Otherwise, it will return true and output the randomly selected clip.
         /// </summary>
-        bool TryGetClip(SfxType sfxType, out AudioClip clip, out float volume)
+        bool TryGetClip(Enum requestedAudio, out AudioClip clip, out float volume)
         {
             clip = null;
-            var sfx = sfxDictionary.GetValueOrDefault(sfxType);
-            if (!sfxDictionary.ContainsKey(sfxType))
+            volume = 0f;
+
+            if(audioSourcePrefab == null)
             {
-                Debug.LogWarning($"[Audio Manager] No SFX data found in dictionary for SFX type: {sfxType}. Make sure to assign a SfxScriptableObject for this SFX type in the AudioManager inspector.");
-                volume = 0f;
-                return false;
-            }
-            volume = sfx.data.volume;
-            if (sfx == null || sfx.data.clips == null || sfx.data.clips.Length == 0)
-            {
-                Debug.LogWarning($"[Audio Manager] No clips assigned for SFX: {sfxType}");
+                Debug.LogWarning($"[Audio Manager] No audio source prefab assigned. Please assign an audio source prefab in the inspector."); 
                 return false;
             }
 
-            clip = sfx.data.clips[Random.Range(0, sfx.data.clips.Length)];
+            if(requestedAudio == null || requestedAudio.ToString() == "")
+            {
+                Debug.LogWarning("[Audio Manager] Requested audio is null or None. Make sure to pass a valid enum value when trying to get a clip, or that a Audio Library has a clip assigned for this audio type.");
+                return false;
+            }
+
+            Type enumType = requestedAudio.GetType();
+
+            // Find matching library
+            if (!audioLibraries.TryGetValue(enumType, out var library))
+            {
+                Debug.LogWarning($"[Audio Manager] No library found for enum type {enumType.Name}");
+                return false;
+            }
+
+            // Find sound inside library
+            if (!library.TryGetValue(requestedAudio, out var audioData))
+            {
+                Debug.LogWarning(
+                    $"[Audio Manager] No clip found for {requestedAudio}");
+                return false;
+            }
+
+            if (audioData == null || audioData.audioClips == null || audioData.audioClips.Length == 0)
+            {
+                Debug.LogWarning($"[Audio Manager] No clips assigned for requested audio: {requestedAudio}");
+                return false;
+            }
+
+            clip = audioData.audioClips[Random.Range(0, audioData.audioClips.Length)];
+            volume = audioData.volume;
             return clip != null;
         }
 
@@ -222,14 +267,179 @@ namespace AudioManagement
             }
         }
 
+        #region Stop and Pause Methods
+
         /// <summary>
-        /// Plays a sound effect at the position of the specified transform.
+        /// Used to stop the specified audio source. 
+        /// The AudioSource passed in should be the one returned by the initial Play method.
+        /// When an audio source is stopped, it is returned to the pool and can be reused for future audio playback requests.
+        /// </summary>
+        public static void Stop(AudioSource audioSource)
+        {
+            if (audioSource != null && audioSource.isPlaying)
+            {
+                instance.StartCoroutine(instance.StopSound(audioSource));
+            }
+        }
+
+        /// <summary>
+        /// Used to stop all looping audio of the specified type. 
+        /// This will find all currently playing audio sources that are playing the same clip as the requested audio and stop them.
+        /// When an audio source is stopped, it is returned to the pool and can be reused for future audio playback requests.
+        /// </summary>
+        public static void StopAllLoopingOfType(Enum requestedAudio)
+        {
+            if (!instance.TryGetClip(requestedAudio, out var clip, out float volume)) return;
+
+            var audioSources = instance.audioSourcePool.Where(source => source.AudioSource.clip == clip && source.AudioSource.loop).Select(source => source.AudioSource).ToArray();
+            foreach (var source in audioSources)
+            {
+                instance.StartCoroutine(instance.StopSound(source));
+            }
+        }
+
+        /// <summary>
+        /// Used to stop all currently playing audio sources of the specified type.
+        /// When an audio source is stopped, it is returned to the pool and can be reused for future audio playback requests.
+        /// </summary>
+        public static void StopAllOfType(Enum requestedAudio)
+        {
+            if (!instance.TryGetClip(requestedAudio, out var clip, out float volume)) return;
+            var audioSources = instance.audioSourcePool.Where(source => source.AudioSource.clip == clip).Select(source => source.AudioSource).ToArray();
+            foreach (var source in audioSources)
+            {
+                instance.StartCoroutine(instance.StopSound(source));
+            }
+        }
+
+        /// <summary>
+        /// Used to stop all currently playing audio sources, regardless of type.
+        /// When an audio source is stopped, it is returned to the pool and can be reused for future audio playback requests.
+        /// </summary>
+        public static void StopAll()
+        {
+            var audioSources = instance.audioSourcePool.Where(source => source.AudioSource.isPlaying).Select(source => source.AudioSource).ToArray();
+            foreach (var source in audioSources)
+            {
+                instance.StartCoroutine(instance.StopSound(source));
+            }
+        }
+
+        /// <summary>
+        /// Used to pause the specified audio source. 
+        /// Paused audio sources can be unpaused with different UnPause methods.
+        /// Paused audio sources will not be returned to the pool until they are unpaused and finish playing, so use this method with caution to avoid exhausting available audio sources in the pool.
+        /// </summary>
+        public static void Pause(AudioSource audioSource)
+        {
+            if (audioSource != null && audioSource.isPlaying)
+            {
+                audioSource.Pause();
+            }
+        }
+
+        /// <summary>
+        /// Used to pause all currently playing looping audio sources of the specified type.
+        /// Paused audio sources can be unpaused with different UnPause methods.
+        /// Paused audio sources will not be returned to the pool until they are unpaused and finish playing, so use this method with caution to avoid exhausting available audio sources in the pool.
+        /// </summary>
+        public static void PauseAllLoopingOfType(Enum requestedAudio)
+        {
+            if (!instance.TryGetClip(requestedAudio, out var clip, out float volume)) return;
+            var audioSources = instance.audioSourcePool.Where(source => source.AudioSource.clip == clip && source.AudioSource.loop && source.AudioSource.isPlaying).Select(source => source.AudioSource).ToArray();
+            foreach (var source in audioSources)
+            {
+                source.Pause();
+            }
+        }
+
+        /// <summary>
+        /// Used to pause all currently playing audio sources of the specified type.
+        /// Paused audio sources can be unpaused with different UnPause methods.
+        /// Paused audio sources will not be returned to the pool until they are unpaused and finish playing, so use this method with caution to avoid exhausting available audio sources in the pool.
+        /// </summary>
+        public static void PauseAllOfType(Enum requestedAudio)
+        {
+            if (!instance.TryGetClip(requestedAudio, out var clip, out float volume)) return;
+            var audioSources = instance.audioSourcePool.Where(source => source.AudioSource.clip == clip && source.AudioSource.isPlaying).Select(source => source.AudioSource).ToArray();
+            foreach (var source in audioSources)
+            {
+                source.Pause();
+            }
+        }
+
+        /// <summary>
+        /// Used to pause all currently playing audio sources, regardless of type.
+        /// Can be unpaused with UnPauseAll to resume playback of all paused audio sources.
+        /// Paused audio sources will not be returned to the pool until they are unpaused and finish playing, so use this method with caution to avoid exhausting available audio sources in the pool.
+        /// </summary>
+        public static void PauseAll()
+        {
+            var audioSources = instance.audioSourcePool.Where(source => source.AudioSource.isPlaying).Select(source => source.AudioSource).ToArray();
+            foreach (var source in audioSources)
+            {
+                source.Pause();
+            }
+        }
+        
+        /// <summary>
+        /// Used to unpause the specified audio source if it is currently paused.
+        /// </summary>
+        public static void UnPause(AudioSource audioSource)
+        {
+            if (audioSource != null && !audioSource.isPlaying)
+            {
+                audioSource.UnPause();
+            }
+        }
+
+        /// <summary>
+        /// Used to unpause all currently paused looping audio sources of the specified type.
+        /// </summary>
+        public static void UnPauseAllLoopingOfType(Enum requestedAudio)
+        {
+            if (!instance.TryGetClip(requestedAudio, out var clip, out float volume)) return;
+            var audioSources = instance.audioSourcePool.Where(source => source.AudioSource.clip == clip && source.AudioSource.loop && !source.AudioSource.isPlaying).Select(source => source.AudioSource).ToArray();
+            foreach (var source in audioSources)
+            {
+                source.UnPause();
+            }
+        }
+
+        /// <summary>
+        /// Used to unpause all currently paused audio sources of the specified type.
+        /// </summary>
+        public static void UnPauseAllOfType(Enum requestedAudio)
+        {
+            if (!instance.TryGetClip(requestedAudio, out var clip, out float volume)) return;
+            var audioSources = instance.audioSourcePool.Where(source => source.AudioSource.clip == clip && !source.AudioSource.isPlaying).Select(source => source.AudioSource).ToArray();
+            foreach (var source in audioSources)
+            {
+                source.UnPause();
+            }
+        }
+
+        /// <summary>
+        /// Used to unpause all currently paused audio sources, regardless of type.
+        /// </summary>
+        public static void UnPauseAll()
+        {
+            var audioSources = instance.audioSourcePool.Where(source => !source.AudioSource.isPlaying).Select(source => source.AudioSource).ToArray();
+            foreach (var source in audioSources)
+            {
+                source.UnPause();
+            }
+        }
+        #endregion
+
+        /// <summary>
+        /// Plays the requested audio at the position of the specified transform.
         /// If followTransform is true, the sound will follow the position of the transform until it finishes playing.
         /// If no transform is specified, the sound will play in 2D space.
         /// </summary>
-        public static void Play(SfxType sfx, Transform transform = null, bool followTransform = false)
+        public static void Play(Enum requestedAudio, Transform transform = null, bool followTransform = false)
         {
-            if (!instance.TryGetClip(sfx, out var clip, out float volume)) return;
+            if (!instance.TryGetClip(requestedAudio, out var clip, out float volume)) return;
 
             var pooledAudioSource = instance.GetAudioSource();
 
@@ -241,17 +451,17 @@ namespace AudioManagement
             pooledAudioSource.AudioSource.Play();
             instance.StartCoroutine(instance.ReturnAudioSource(pooledAudioSource));
 #if UNITY_EDITOR
-            pooledAudioSource.name = $"AudioSource_{sfx}_{clip.name}";
+            pooledAudioSource.name = $"AudioSource_{requestedAudio}_{clip.name}";
 #endif
         }
 
         /// <summary>
-        /// Plays a looping sound effect at the position of the specified transform.
-        /// To stop the looping sound, call StopLoopSound and pass in the AudioSource returned by this method.
+        /// Plays the requested audio looping at the position of the specified transform.
+        /// To stop the looping audio, call StopLoopSound and pass in the AudioSource returned by this method.
         /// </summary>
-        public static AudioSource PlayLooping(SfxType sfx, Transform transform = null, bool followTransform = false)
+        public static AudioSource PlayLooping(Enum requestedAudio, Transform transform = null, bool followTransform = false)
         {
-            if (!instance.TryGetClip(sfx, out var clip, out float volume)) return null;
+            if (!instance.TryGetClip(requestedAudio, out var clip, out float volume)) return null;
 
             var pooledAudioSource = instance.GetAudioSource();
 
@@ -263,29 +473,17 @@ namespace AudioManagement
             pooledAudioSource.AudioSource.volume = volume;
             pooledAudioSource.AudioSource.Play();
 #if UNITY_EDITOR
-            pooledAudioSource.name = $"AudioSource_{sfx}_{clip.name}";
+            pooledAudioSource.name = $"AudioSource_{requestedAudio}_{clip.name}";
 #endif
             return pooledAudioSource.AudioSource;
         }
 
         /// <summary>
-        /// Used to stop a looping sound that was started with PlayLoopSound. 
-        /// The AudioSource passed in should be the one returned by PlayLoopSound when the looping sound was started.
+        /// Plays the requested audio with a fade-in effect over the specified fade time.
         /// </summary>
-        public static void StopLooping(AudioSource audioSource)
+        public static void PlayFadeIn(Enum requestedAudio, float fadeTime = 1f, Transform transform = null, bool followTransform = false)
         {
-            if (audioSource != null && audioSource.isPlaying)
-            {
-                instance.StartCoroutine(instance.StopSound(audioSource));
-            }
-        }
-
-        /// <summary>
-        /// Plays a sound effect with a fade-in effect over the specified fade time.
-        /// </summary>
-        public static void PlayFadeIn(SfxType sfx, float fadeTime = 1f, Transform transform = null, bool followTransform = false)
-        {
-            if (!instance.TryGetClip(sfx, out var clip, out float volume)) return;
+            if (!instance.TryGetClip(requestedAudio, out var clip, out float volume)) return;
 
             var pooledAudioSource = instance.GetAudioSource();
 
@@ -297,16 +495,16 @@ namespace AudioManagement
             instance.StartCoroutine(instance.PlayFadeCoroutine(pooledAudioSource.AudioSource, fadeTime, 0, pooledAudioSource.AudioSource.volume));
             instance.StartCoroutine(instance.ReturnAudioSource(pooledAudioSource));
 #if UNITY_EDITOR
-            pooledAudioSource.name = $"AudioSource_{sfx}_{clip.name}";
+            pooledAudioSource.name = $"AudioSource_{requestedAudio}_{clip.name}";
 #endif
         }
 
         /// <summary>
-        /// Plays a sound effect with a fade-out effect over the specified fade time.
+        /// Plays the requested audio with a fade-out effect over the specified fade time.
         /// </summary>
-        public static void PlayFadeOut(SfxType sfx, float fadeTime = 1f, Transform transform = null, bool followTransform = false)
+        public static void PlayFadeOut(Enum requestedAudio, float fadeTime = 1f, Transform transform = null, bool followTransform = false)
         {
-            if (!instance.TryGetClip(sfx, out var clip, out float volume)) return;
+            if (!instance.TryGetClip(requestedAudio, out var clip, out float volume)) return;
 
             var pooledAudioSource = instance.GetAudioSource();
 
@@ -318,12 +516,12 @@ namespace AudioManagement
             instance.StartCoroutine(instance.PlayFadeCoroutine(pooledAudioSource.AudioSource, fadeTime, pooledAudioSource.AudioSource.volume, 0));
             instance.StartCoroutine(instance.ReturnAudioSource(pooledAudioSource));
 #if UNITY_EDITOR
-            pooledAudioSource.name = $"AudioSource_{sfx}_{clip.name}";
+            pooledAudioSource.name = $"AudioSource_{requestedAudio}_{clip.name}";
 #endif
         }
 
         /// <summary>
-        /// Fades the sound effect's volume from the specified start volume to the target volume over the specified fade time.
+        /// Fades the requested audio's volume from the specified start volume to the target volume over the specified fade time.
         /// </summary>
         IEnumerator PlayFadeCoroutine(AudioSource audioSource, float fadeTime, float startVolume, float targetVolume)
         {
@@ -340,11 +538,11 @@ namespace AudioManagement
         }
 
         /// <summary>
-        /// Plays a sound effect with random pitch and volume variations.
+        /// Plays the requested audio with random pitch and volume variations.
         /// </summary>
-        public static void PlayRandomPitchAndVolume(SfxType sfx, float pitchRange = 0.05f, float volumeRange = 0.02f, Transform transform = null, bool followTransform = false)
+        public static void PlayRandomPitchAndVolume(Enum requestedAudio, float pitchRange = 0.05f, float volumeRange = 0.02f, Transform transform = null, bool followTransform = false)
         {
-            if (!instance.TryGetClip(sfx, out var clip, out float volume)) return;
+            if (!instance.TryGetClip(requestedAudio, out var clip, out float volume)) return;
 
             var pooledAudioSource = instance.GetAudioSource();
 
@@ -357,7 +555,7 @@ namespace AudioManagement
             pooledAudioSource.AudioSource.Play();
             instance.StartCoroutine(instance.ReturnAudioSource(pooledAudioSource));
 #if UNITY_EDITOR
-            pooledAudioSource.name = $"AudioSource_{sfx}_{clip.name}";
+            pooledAudioSource.name = $"AudioSource_{requestedAudio}_{clip.name}";
 #endif
         }
 
@@ -371,15 +569,18 @@ namespace AudioManagement
 #if UNITY_EDITOR
         void OnValidate()
         {
+            // This will rename the GameObject to "AudioManager" for organization purposes in the editor, and does not affect the functionality of the GameObject in any way.
             if (gameObject != null)
                 gameObject.name = "AudioManager";
-            PopulateDictionary();
+
+            // Whenever something is changed in the inspector, we want to re-populate the audio libraries to ensure that any changes to the assigned AudioLibrary ScriptableObjects are reflected in the audioLibraries dictionary.
+            PopulateAudioLibraries();
         }
 
         /// <summary>
         /// This is a test method that should ONLY be called from the Unity Editor.
         /// </summary>
-        public static void EditorTestPlay(SfxType sfx)
+        public static void EditorTestPlay(Enum requestedAudio)
         {
             if (instance == null)
             {
@@ -391,7 +592,7 @@ namespace AudioManagement
                 }
             }
 
-            if (!instance.TryGetClip(sfx, out var clip, out float volume)) return;
+            if (!instance.TryGetClip(requestedAudio, out var clip, out float volume)) return;
 
             var pooledAudioSource = instance.GetAudioSource();
 
@@ -406,7 +607,7 @@ namespace AudioManagement
         /// <summary>
         /// This is a test method that should ONLY be called from the Unity Editor.
         /// </summary>
-        public static void EditorTestPlayRandomPitchAndVolume(SfxType sfx, float pitchRange = 0.035f, float volumeRange = 0.02f)
+        public static void EditorTestPlayRandomPitchAndVolume(Enum requestedAudio, float pitchRange = 0.035f, float volumeRange = 0.02f)
         {
             if (instance == null)
             {
@@ -418,7 +619,7 @@ namespace AudioManagement
                 }
             }
 
-            if (!instance.TryGetClip(sfx, out var clip, out float volume)) return;
+            if (!instance.TryGetClip(requestedAudio, out var clip, out float volume)) return;
 
             var pooledAudioSource = instance.GetAudioSource();
 
@@ -434,7 +635,7 @@ namespace AudioManagement
         /// <summary>
         /// This is a test method that should ONLY be called from the Unity Editor.
         /// </summary>
-        public static AudioSource EditorTestPlayLooping(SfxType sfx)
+        public static AudioSource EditorTestPlayLooping(Enum requestedAudio)
         {
             if (instance == null)
             {
@@ -446,7 +647,7 @@ namespace AudioManagement
                 }
             }
 
-            if (!instance.TryGetClip(sfx, out var clip, out float volume)) return null;
+            if (!instance.TryGetClip(requestedAudio, out var clip, out float volume)) return null;
 
             var pooledAudioSource = instance.GetAudioSource();
 

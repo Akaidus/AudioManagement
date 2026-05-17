@@ -27,10 +27,15 @@ namespace AudioManagement
             if (AudioSource == null)
             {
                 if (!TryGetComponent<AudioSource>(out var audioSource))
-                {
                     gameObject.AddComponent<AudioSource>();
-                }
+
                 AudioSource = GetComponent<AudioSource>();
+                
+                AudioSource.playOnAwake = false;
+
+                // This will rename the GameObject to "PooledAudioSource" for organization purposes in the editor, and does not affect the functionality of the GameObject in any way.
+                if (gameObject != null)
+                    gameObject.name = "PooledAudioSource";
             }
         }
 #endif

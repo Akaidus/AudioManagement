@@ -44,8 +44,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 1a0e8f6e639fd4f44849a0e7f8598968, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::AudioManager
-  audioSourcePrefab: {fileID: 3028762402230270665, guid: a63a3b8de3ecadc4898f2fb76384072a, type: 3}
+  audioSourcePrefab: {fileID: 0}
   maxAudioSourcesCount: 30
   pruneInterval: 10
   sfxScriptableObjects:
-  - {fileID: 11400000, guid: 8d6ad4e1c5966a546a5056586f3e0110, type: 2}
+  - {fileID: 0}
+  audioLibraryScriptableObjects: []
