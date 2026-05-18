@@ -55,7 +55,7 @@ namespace AudioManagement
                 return;
             }
 
-            var libraryName = library.Name;
+            var libraryName = MakeSafe(library.Name);
 
             string enumName = library.audioCategory.GetType().Name;
             string path = $"Packages/com.akaidus.audiomanagement/Runtime/Scripts/Enums/{enumName}.cs";
@@ -137,6 +137,8 @@ namespace AudioManagement
                     continue;
                 }
 
+                sound.Name = MakeSafe(sound.Name);
+
                 if (!added.Add(sound.Name))
                     continue;
 
@@ -195,6 +197,26 @@ namespace AudioManagement
             {
                 Debug.LogWarning($"[Audio Manager] Could not parse enum value from library name {library.Name} in {library.audioCategory.GetType()}.");
             }
+        }
+
+        /// <summary>
+        /// Takes a string and sanitizes it to make it safe to use as an enum name by replacing spaces with underscores and removing any non-alphanumeric characters (except for underscores).
+        /// </summary>
+        string MakeSafe(string input)
+        {
+            input = input.Replace(" ", "_");
+            Regex regex = new("[^a-zA-Z0-9_]");
+            StringBuilder sb = new();
+
+            foreach (var c in input)
+            {
+                if (regex.IsMatch(c.ToString()))
+                    continue;
+                if (char.IsLetterOrDigit(c) || c == '_')
+                    sb.Append(c);
+            }
+
+            return sb.ToString();
         }
 
         void OnCompilationFinishedAfterAddingLibrary(object ctx)
