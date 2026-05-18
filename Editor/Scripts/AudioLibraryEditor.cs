@@ -93,7 +93,7 @@ namespace AudioManagement
                     return;
                 }
 
-                string newEntry = $"    {library.Name},\n";
+                string newEntry = $"    {libraryName},\n";
 
                 fileContent = fileContent.Insert(insertIndex, newEntry);
 
