@@ -6,6 +6,7 @@ using UnityEditor;
 using UnityEngine;
 using UnityEditor.Compilation;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 
 namespace AudioManagement
 {
