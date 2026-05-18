@@ -56,7 +56,7 @@ namespace AudioManagement
                 return;
             }
 
-            var libraryName = MakeSafe(library.Name);
+            library.Name = MakeSafe(library.Name);
 
             string enumName = library.audioCategory.GetType().Name;
             string path = $"Packages/com.akaidus.audiomanagement/Runtime/Scripts/Enums/{enumName}.cs";
@@ -68,7 +68,7 @@ namespace AudioManagement
 
                 sb.AppendLine($"public enum {enumName}");
                 sb.AppendLine("{");
-                sb.AppendLine($"    {libraryName}");
+                sb.AppendLine($"    {library.Name}");
                 sb.AppendLine("}");
 
                 File.WriteAllText(path, sb.ToString());
@@ -78,9 +78,9 @@ namespace AudioManagement
                 string fileContent = File.ReadAllText(path);
 
                 // Prevent duplicates
-                if (fileContent.Contains($"{libraryName}"))
+                if (fileContent.Contains($"{library.Name}"))
                 {
-                    Debug.Log($"[Audio Library] {libraryName} already exists in {enumName}");
+                    Debug.Log($"[Audio Library] {library.Name} already exists in {enumName}");
                     return;
                 }
 
@@ -93,19 +93,17 @@ namespace AudioManagement
                     return;
                 }
 
-                string newEntry = $"    {libraryName},\n";
+                string newEntry = $"    {library.Name},\n";
 
                 fileContent = fileContent.Insert(insertIndex, newEntry);
 
                 File.WriteAllText(path, fileContent);
             }
 
-            library.Name = libraryName;
-
-            string libraryPath = $"Packages/com.akaidus.audiomanagement/Runtime/Scripts/Enums/{libraryName}.cs";
+            string libraryPath = $"Packages/com.akaidus.audiomanagement/Runtime/Scripts/Enums/{library.Name}.cs";
 
             var libSb = new StringBuilder();
-            libSb = libSb.AppendLine($"public enum {libraryName}");
+            libSb = libSb.AppendLine($"public enum {library.Name}");
             libSb = libSb.AppendLine("{");
             libSb = libSb.AppendLine($"    None,");
             libSb = libSb.AppendLine("}");
